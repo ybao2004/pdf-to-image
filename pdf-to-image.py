@@ -2241,9 +2241,9 @@ class SettingsDialog(QDialog):
                     self.btn_download_update.clicked.connect(_open_exe)
                     return
             
-            import subprocess
-            # Chạy file cài đặt với đầy đủ giao diện để người dùng có thể theo dõi tiến độ
-            subprocess.Popen([result])
+            import os
+            # Sử dụng os.startfile để tự động kích hoạt quyền UAC (tránh lỗi WinError 740)
+            os.startfile(result)
             
             # Đóng tất cả các tiến trình PDF to Image.exe hoặc pdf-to-image.py để file cài đặt ghi đè
             from PyQt6.QtCore import QCoreApplication
