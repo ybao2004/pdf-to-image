@@ -114,7 +114,7 @@ def set_titlebar_theme(hwnd, dark: bool):
 # CONSTANTS
 # ======================================================================
 APP_NAME    = "Chuyển đổi PDF sang ảnh"
-APP_VERSION = "0.0.6"
+APP_VERSION = "0.0.7"
 UPDATE_ANY_DIFFERENT_VERSION = True  # Nếu True, cập nhật nếu phiên bản khác hiện tại; Nếu False, chỉ cập nhật nếu phiên bản lớn hơn.
 UPDATE_CHECK_INTERVAL_MINUTES = 60   # Thời gian (phút) giữa mỗi lần kiểm tra ngầm phiên bản mới
 APP_AUTHOR  = "@ybao"
@@ -2241,7 +2241,9 @@ class SettingsDialog(QDialog):
                     self.btn_download_update.clicked.connect(_open_exe)
                     return
             
-            os.startfile(result)
+            import subprocess
+            # Chạy file cài đặt với đầy đủ giao diện để người dùng có thể theo dõi tiến độ
+            subprocess.Popen([result])
             
             # Đóng tất cả các tiến trình PDF to Image.exe hoặc pdf-to-image.py để file cài đặt ghi đè
             from PyQt6.QtCore import QCoreApplication
