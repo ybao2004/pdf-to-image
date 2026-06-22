@@ -1,4 +1,4 @@
-#define AppVer "0.0.7"
+#define AppVer "0.0.8"
 
 [Setup]
 AppName=PDF to Image
