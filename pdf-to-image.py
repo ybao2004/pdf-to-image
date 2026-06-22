@@ -114,8 +114,9 @@ def set_titlebar_theme(hwnd, dark: bool):
 # CONSTANTS
 # ======================================================================
 APP_NAME    = "Chuyển đổi PDF sang ảnh"
-APP_VERSION = "0.0.4"
+APP_VERSION = "0.0.5"
 UPDATE_ANY_DIFFERENT_VERSION = True  # Nếu True, cập nhật nếu phiên bản khác hiện tại; Nếu False, chỉ cập nhật nếu phiên bản lớn hơn.
+UPDATE_CHECK_INTERVAL_MINUTES = 60   # Thời gian (phút) giữa mỗi lần kiểm tra ngầm phiên bản mới
 APP_AUTHOR  = "@ybao"
 CONFIG_PATH = Path.home() / "pdf_img_config.json"
 
@@ -2057,7 +2058,7 @@ class SettingsDialog(QDialog):
         # Thông tin đi kèm
         import platform
         os_info_str = get_os_full_version()
-        sys_info = f"Thông tin đính kèm: Tên máy: {platform.node()} | HĐH: {os_info_str}"
+        sys_info = f"Thông tin đính kèm: {platform.node()} | HĐH: {os_info_str}"
         lbl_sys_info = QLabel(sys_info)
         lbl_sys_info.setStyleSheet("color: #888; font-size: 11px;")
         lay_gfb.addWidget(lbl_sys_info)
@@ -2176,6 +2177,11 @@ class SettingsDialog(QDialog):
         elif version:
             self.lbl_update_status.setText("Bạn đang dùng bản mới nhất.")
             self.lbl_update_status.setStyleSheet("color: #28a745;")
+            if body:
+                self.txt_release_notes.setPlainText(body)
+                self.txt_release_notes.setVisible(True)
+            if main_win and hasattr(main_win, 'hide_update_indicator'):
+                main_win.hide_update_indicator()
             if main_win and hasattr(main_win, 'cfg'):
                 main_win.cfg.update({
                     "update_status": "latest",
@@ -2743,7 +2749,6 @@ class MainWindow(QMainWindow):
         if self.cfg.get("update_status") == "available" and self.cfg.get("update_latest_version"):
             self.update_url = self.cfg.get("update_url", "")
             self.latest_version = self.cfg.get("update_latest_version", "")
-            self.show_update_indicator()
         
         # --- ICON CHO PHẦN MỀM ---
         def resource_path(relative_path):
@@ -2796,6 +2801,10 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_central()
         self._build_statusbar()
+        
+        # Hiện dấu chấm đỏ nếu có bản cập nhật
+        if self.cfg.get("update_status") == "available":
+            self.show_update_indicator()
 
     # ── TOOLBAR (cài đặt nhanh + actions) ────────────────────────────
     def _build_toolbar(self):
@@ -3233,6 +3242,14 @@ class MainWindow(QMainWindow):
             self._act_settings.setToolTip("Cài đặt nâng cao (Có bản cập nhật mới!)")
         if hasattr(self, '_badge_btn'):
             self._badge_btn.setBadgeVisible(True)
+
+    def hide_update_indicator(self):
+        self.has_update = False
+        if hasattr(self, '_act_settings'):
+            self._act_settings.setText("⚙")
+            self._act_settings.setToolTip("Cài đặt nâng cao")
+        if hasattr(self, '_badge_btn'):
+            self._badge_btn.setBadgeVisible(False)
 
     # ── SETTINGS DIALOG ───────────────────────────────────────────────
     def _open_settings(self):
@@ -4169,11 +4186,18 @@ class BackgroundService(QObject):
         
         self.tray.activated.connect(self.on_tray_activated)
         
-        # --- Kiểm tra cập nhật khi khởi động ---
+        # --- Kiểm tra cập nhật định kỳ ---
         if self.cfg.get("auto_check_update", True):
-            self._bg_update_checker = UpdateCheckerThread()
-            self._bg_update_checker.update_result.connect(self._on_bg_update_result)
-            self._bg_update_checker.start()
+            self._check_update_now()
+            
+            self._update_timer = QTimer(self)
+            self._update_timer.timeout.connect(self._check_update_now)
+            self._update_timer.start(UPDATE_CHECK_INTERVAL_MINUTES * 60 * 1000)
+
+    def _check_update_now(self):
+        self._bg_update_checker = UpdateCheckerThread()
+        self._bg_update_checker.update_result.connect(self._on_bg_update_result)
+        self._bg_update_checker.start()
 
     def _on_bg_update_result(self, has_update, version, url, published_at, body):
         if has_update:
