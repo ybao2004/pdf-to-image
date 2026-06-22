@@ -114,7 +114,7 @@ def set_titlebar_theme(hwnd, dark: bool):
 # CONSTANTS
 # ======================================================================
 APP_NAME    = "Chuyển đổi PDF sang ảnh"
-APP_VERSION = "0.0.0"
+APP_VERSION = "0.0.6"
 UPDATE_ANY_DIFFERENT_VERSION = True  # Nếu True, cập nhật nếu phiên bản khác hiện tại; Nếu False, chỉ cập nhật nếu phiên bản lớn hơn.
 UPDATE_CHECK_INTERVAL_MINUTES = 60   # Thời gian (phút) giữa mỗi lần kiểm tra ngầm phiên bản mới
 APP_AUTHOR  = "@ybao"
@@ -2248,6 +2248,11 @@ class SettingsDialog(QDialog):
             import psutil
             import sys
             import os
+            import time
+            
+            # Đợi 2 giây để đảm bảo tiến trình cài đặt (UAC) đã khởi chạy an toàn trước khi tự sát
+            time.sleep(2.0)
+            
             try:
                 current_pid = os.getpid()
                 for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
