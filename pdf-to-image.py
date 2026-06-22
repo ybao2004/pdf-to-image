@@ -114,7 +114,7 @@ def set_titlebar_theme(hwnd, dark: bool):
 # CONSTANTS
 # ======================================================================
 APP_NAME    = "Chuyển đổi PDF sang ảnh"
-APP_VERSION = "0.0.5"
+APP_VERSION = "0.0.0"
 UPDATE_ANY_DIFFERENT_VERSION = True  # Nếu True, cập nhật nếu phiên bản khác hiện tại; Nếu False, chỉ cập nhật nếu phiên bản lớn hơn.
 UPDATE_CHECK_INTERVAL_MINUTES = 60   # Thời gian (phút) giữa mỗi lần kiểm tra ngầm phiên bản mới
 APP_AUTHOR  = "@ybao"
@@ -3238,7 +3238,7 @@ class MainWindow(QMainWindow):
     def show_update_indicator(self):
         self.has_update = True
         if hasattr(self, '_act_settings'):
-            self._act_settings.setText("⚙ Cài đặt (Có bản mới)")
+            self._act_settings.setText("⚙ Cài đặt")
             self._act_settings.setToolTip("Cài đặt nâng cao (Có bản cập nhật mới!)")
         if hasattr(self, '_badge_btn'):
             self._badge_btn.setBadgeVisible(True)
@@ -3667,10 +3667,51 @@ class AnimatedSplashScreen(QWidget):
                 'delay': random.uniform(2.6, 4.0),
                 'life': random.uniform(1.2, 3.0)
             })
+            
+        self._update_checked = False
+        self._update_finished_time = 0
+        self._update_result_msg = ""
+        
+        cfg = Config()
+        if cfg.get("auto_check_update", True):
+            self._bg_update_checker = UpdateCheckerThread()
+            self._bg_update_checker.update_result.connect(self._on_update_result)
+            self._bg_update_checker.start()
+        else:
+            self._update_checked = True
+            self._update_finished_time = -10
         
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
         self._timer.start(1000 // 60)
+        
+    def _on_update_result(self, has_update, version, url, published_at, body):
+        self._update_checked = True
+        import time
+        self._update_finished_time = time.time()
+        
+        cfg = Config()
+        if has_update:
+            self._update_result_msg = f"Đã tìm thấy bản cập nhật mới v{version}!"
+            cfg.update({
+                "update_status": "available",
+                "update_latest_version": version,
+                "update_url": url,
+                "update_published_at": published_at,
+                "update_release_notes": body,
+            })
+        elif version:
+            self._update_result_msg = "Phiên bản hiện tại đã là mới nhất."
+            cfg.update({
+                "update_status": "latest",
+                "update_latest_version": version,
+                "update_url": url,
+                "update_published_at": published_at,
+                "update_release_notes": body,
+            })
+        else:
+            self._update_result_msg = "Kiểm tra cập nhật thất bại."
+            cfg.update({"update_status": "error"})
         
     def showEvent(self, event):
         self._start_time = time.time()
@@ -3680,12 +3721,26 @@ class AnimatedSplashScreen(QWidget):
         import time
         from PyQt6.QtWidgets import QApplication
         
-        self._time = time.time() - self._start_time
+        current_time = time.time()
+        self._time = current_time - self._start_time
         
-        # Cập nhật Logs liên tục
-        if self._time < 1.0:
+        # Chờ kiểm tra update
+        if not self._update_checked:
+            self._current_log = "Đang kiểm tra phiên bản mới..."
+            self.update()
+            return
+            
+        # Hiện kết quả update trong 1 giây
+        time_since_checked = current_time - self._update_finished_time
+        if time_since_checked < 1.0 and self._update_finished_time > 0:
+            self._current_log = self._update_result_msg
+            self.update()
+            return
+            
+        # Cập nhật Logs liên tục (thời gian fake còn lại)
+        if self._time < 1.5:
             self._current_log = "Kết nối phân luồng đa nhiệm (Multi-threading)..."
-        elif self._time < 2.0:
+        elif self._time < 2.5:
             self._current_log = "Đọc cấu hình người dùng từ bộ nhớ đệm..."
         elif self._time < 4.2:
             self._current_log = "Đồng bộ hóa Theme hệ thống Windows..."
@@ -4210,7 +4265,7 @@ class BackgroundService(QObject):
             })
             self.tray.showMessage(
                 "PDF to Image - Cập nhật mới",
-                f"Có bản cập nhật mới v{version}!\nMở Cài đặt → Hệ thống để cập nhật.",
+                f"Có bản cập nhật mới v{version}!\nMở PDF to Image → Cài đặt → Hệ thống để cập nhật.",
                 QSystemTrayIcon.MessageIcon.Information,
                 10000
             )
