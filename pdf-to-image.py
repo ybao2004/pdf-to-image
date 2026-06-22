@@ -89,7 +89,7 @@ def set_titlebar_theme(hwnd, dark: bool):
 # CONSTANTS
 # ======================================================================
 APP_NAME    = "Chuyển đổi PDF sang ảnh"
-APP_VERSION = "0.0.3"
+APP_VERSION = "0.0.4"
 APP_AUTHOR  = "@ybao"
 CONFIG_PATH = Path.home() / "pdf_img_config.json"
 
@@ -1715,6 +1715,32 @@ class HistoryPanel(QWidget):
 
 
 # ======================================================================
+# BADGE TOOL BUTTON — nút với dấu chấm đỏ thông báo
+# ======================================================================
+class BadgeToolButton(QToolButton):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._badge_visible = False
+
+    def setBadgeVisible(self, visible: bool):
+        self._badge_visible = visible
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._badge_visible:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            dot_size = 8
+            x = self.width() - dot_size - 3
+            y = 3
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor("#ff3b30")))
+            painter.drawEllipse(x, y, dot_size, dot_size)
+            painter.end()
+
+
+# ======================================================================
 # SETTINGS DIALOG — tất cả cài đặt nâng cao
 # ======================================================================
 class SettingsDialog(QDialog):
@@ -2712,8 +2738,13 @@ class MainWindow(QMainWindow):
 
         sep2()
 
-        # ── Cài đặt nâng cao
-        self._act_settings = self._tb_btn(tb2, "⚙", self._open_settings, "Cài đặt nâng cao")
+        # ── Cài đặt nâng cao (dùng BadgeToolButton để hiển thị dấu chấm đỏ)
+        self._act_settings = QAction("⚙", self)
+        self._act_settings.setToolTip("Cài đặt nâng cao")
+        self._act_settings.triggered.connect(self._open_settings)
+        self._badge_btn = BadgeToolButton()
+        self._badge_btn.setDefaultAction(self._act_settings)
+        tb2.addWidget(self._badge_btn)
 
         # ── Theme toggle
         self._act_theme = self._tb_btn(tb2, "🌙", self._toggle_theme, "Chuyển Dark/Light")
@@ -3010,6 +3041,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_act_settings'):
             self._act_settings.setText("⚙ Cài đặt (Có bản mới)")
             self._act_settings.setToolTip("Cài đặt nâng cao (Có bản cập nhật mới!)")
+        if hasattr(self, '_badge_btn'):
+            self._badge_btn.setBadgeVisible(True)
 
     # ── SETTINGS DIALOG ───────────────────────────────────────────────
     def _open_settings(self):
@@ -3920,7 +3953,7 @@ class BackgroundService(QObject):
             pass
         self.tray.setToolTip(f"PDF to Image (Background Service)")
         
-        # Menu
+        # Menu (không dùng setContextMenu để tránh lag)
         self.tray_menu = QMenu()
         
         self.action_show = QAction("Mở giao diện chính", self)
@@ -3933,7 +3966,6 @@ class BackgroundService(QObject):
         self.action_quit.triggered.connect(self.quit_app)
         self.tray_menu.addAction(self.action_quit)
         
-        self.tray.setContextMenu(self.tray_menu)
         self.tray.show()
         
         self.tray.activated.connect(self.on_tray_activated)
@@ -3971,6 +4003,10 @@ class BackgroundService(QObject):
     def on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self.show_main_ui_process()
+        elif reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                        QSystemTrayIcon.ActivationReason.Context):
+            # Hiện menu tại vị trí chuột cho cả chuột trái và phải
+            self.tray_menu.popup(QCursor.pos())
 
     def show_main_ui_process(self):
         import subprocess, sys
