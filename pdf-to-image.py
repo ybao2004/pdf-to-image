@@ -2217,7 +2217,7 @@ class SettingsDialog(QDialog):
         
     def _on_download_finished(self, success, result):
         if success:
-            self.btn_download_update.setText("Đang cài đặt...")
+            self.btn_download_update.setText("Đang khởi chạy bộ cài đặt...")
             is_busy = False
             main_win = self.parent()
             if main_win and hasattr(main_win, 'service') and main_win.service:
@@ -2241,39 +2241,77 @@ class SettingsDialog(QDialog):
                     self.btn_download_update.clicked.connect(_open_exe)
                     return
             
-            import os
-            # Sử dụng os.startfile để tự động kích hoạt quyền UAC (tránh lỗi WinError 740)
-            os.startfile(result)
+            # Lưu đường dẫn file cài đặt để dùng sau khi delay
+            self._installer_path = result
             
-            # Đóng tất cả các tiến trình PDF to Image.exe hoặc pdf-to-image.py để file cài đặt ghi đè
-            from PyQt6.QtCore import QCoreApplication
-            import psutil
-            import sys
-            import os
-            import time
-            
-            # Đợi 2 giây để đảm bảo tiến trình cài đặt (UAC) đã khởi chạy an toàn trước khi tự sát
-            time.sleep(2.0)
-            
-            try:
-                current_pid = os.getpid()
-                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
-                    try:
-                        if proc.info['pid'] == current_pid: continue
-                        if getattr(sys, 'frozen', False):
-                            if proc.info['name'] == 'PDF to Image.exe': proc.kill()
-                        else:
-                            cmd = proc.info.get('cmdline', [])
-                            if cmd and 'pdf-to-image.py' in ' '.join(cmd): proc.kill()
-                    except:
-                        pass
-            except:
-                pass
-            QCoreApplication.quit()
-            sys.exit(0)
+            # Dùng QTimer delay 500ms để Qt event loop kịp xử lý trước khi chạy bộ cài đặt
+            QTimer.singleShot(500, self._launch_installer_and_exit)
         else:
             self.btn_download_update.setText("Lỗi tải xuống")
             self.btn_download_update.setEnabled(True)
+
+    def _launch_installer_and_exit(self):
+        import ctypes
+        import sys
+        import os
+        
+        installer_path = getattr(self, '_installer_path', '')
+        if not installer_path or not os.path.isfile(installer_path):
+            self.btn_download_update.setText("Lỗi: Không tìm thấy file cài đặt")
+            self.btn_download_update.setEnabled(True)
+            return
+        
+        # Sử dụng ShellExecuteW với verb "runas" để yêu cầu quyền Admin trực tiếp
+        # Hàm này trả về giá trị > 32 nếu thành công
+        ret = ctypes.windll.shell32.ShellExecuteW(
+            None,           # hwnd
+            "runas",        # lpOperation - yêu cầu quyền Admin
+            installer_path, # lpFile
+            "",             # lpParameters
+            None,           # lpDirectory
+            1               # nShowCmd = SW_SHOWNORMAL
+        )
+        
+        if ret <= 32:
+            # ShellExecute thất bại (ví dụ: người dùng từ chối UAC)
+            self.btn_download_update.setText("Cài đặt thủ công")
+            self.btn_download_update.setEnabled(True)
+            try:
+                self.btn_download_update.clicked.disconnect()
+            except:
+                pass
+            path = installer_path
+            def _open_exe():
+                os.startfile(path)
+            self.btn_download_update.clicked.connect(_open_exe)
+            return
+        
+        # Bộ cài đặt đã khởi chạy thành công, đợi 3 giây rồi thoát ứng dụng
+        # Dùng QTimer thay vì time.sleep để không block Qt event loop
+        self.btn_download_update.setText("Đang thoát để cài đặt...")
+        QTimer.singleShot(3000, self._exit_for_update)
+    
+    def _exit_for_update(self):
+        from PyQt6.QtCore import QCoreApplication
+        import psutil
+        import sys
+        import os
+        try:
+            current_pid = os.getpid()
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                try:
+                    if proc.info['pid'] == current_pid: continue
+                    if getattr(sys, 'frozen', False):
+                        if proc.info['name'] == 'PDF to Image.exe': proc.kill()
+                    else:
+                        cmd = proc.info.get('cmdline', [])
+                        if cmd and 'pdf-to-image.py' in ' '.join(cmd): proc.kill()
+                except:
+                    pass
+        except:
+            pass
+        QCoreApplication.quit()
+        sys.exit(0)
 
     def _submit_feedback(self):
         content = self.txt_fb_content.toPlainText().strip()
