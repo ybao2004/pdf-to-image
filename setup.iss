@@ -1,4 +1,4 @@
-#define AppVer "0.0.4"
+#define AppVer "0.0.7"
 
 [Setup]
 AppName=PDF to Image
@@ -73,26 +73,7 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/f /im ""PDF to Image.exe"""; Flags
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
 
-[Code]
-procedure KillApp;
-var
-  ResultCode: Integer;
-begin
-  Exec('cmd.exe', '/c taskkill /f /im "PDF to Image.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Sleep(500);
-end;
 
-function InitializeSetup(): Boolean;
-begin
-  KillApp;
-  Result := True;
-end;
-
-function PrepareToInstall(var NeedsRestart: Boolean): String;
-begin
-  KillApp;
-  Result := '';
-end;
 
 
 
