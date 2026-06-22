@@ -89,7 +89,7 @@ def set_titlebar_theme(hwnd, dark: bool):
 # CONSTANTS
 # ======================================================================
 APP_NAME    = "Chuyển đổi PDF sang ảnh"
-APP_VERSION = "0.0.0"
+APP_VERSION = "0.0.2"
 APP_AUTHOR  = "@ybao"
 CONFIG_PATH = Path.home() / "pdf_img_config.json"
 
