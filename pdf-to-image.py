@@ -89,7 +89,7 @@ def set_titlebar_theme(hwnd, dark: bool):
 # CONSTANTS
 # ======================================================================
 APP_NAME    = "Chuyển đổi PDF sang ảnh"
-APP_VERSION = "0.0.2"
+APP_VERSION = "0.0.3"
 APP_AUTHOR  = "@ybao"
 CONFIG_PATH = Path.home() / "pdf_img_config.json"
 
@@ -151,6 +151,10 @@ DEFAULT_CFG = {
     "cm_dpi":       300,
     "cm_quality":   100,
     "smart_color":  True,
+    "update_status":        "unknown",
+    "update_latest_version":"",
+    "update_url":           "",
+    "update_published_at": "",
 }
 
 
@@ -1861,7 +1865,7 @@ class SettingsDialog(QDialog):
         tab_sys = QWidget()
         lay_sys = QVBoxLayout(tab_sys)
 
-        self.chk_autostart = QCheckBox("Khởi động cùng Windows (chạy ngầm phục vụ Context Menu)")
+        self.chk_autostart = QCheckBox("Khởi động cùng Windows (để dùng context menu)")
         self.chk_autostart.setChecked(is_autostart_enabled())
         self.chk_autostart.toggled.connect(self._on_autostart_toggled)
         lay_sys.addWidget(self.chk_autostart)
@@ -1875,16 +1879,48 @@ class SettingsDialog(QDialog):
         lay_upd.addWidget(self.chk_auto_update)
 
         h_upd = QHBoxLayout()
-        self.lbl_update_status = QLabel("Trạng thái: Đang chờ kiểm tra...")
-        self.lbl_update_status.setStyleSheet("color: #888888;")
+        # Hiển thị trạng thái từ config
+        self._cfg_ref = cfg
+        auto_check = cfg.get("auto_check_update", True)
+        update_status = cfg.get("update_status", "unknown")
+        update_ver = cfg.get("update_latest_version", "")
+        update_pub = cfg.get("update_published_at", "")
+        
+        if not auto_check:
+            status_text = "Chưa kiểm tra"
+            status_color = "#888888"
+            show_download = False
+        elif update_status == "available" and update_ver:
+            status_text = f"Có bản cập nhật mới v{update_ver}!"
+            if update_pub:
+                status_text += f" (Phát hành: {update_pub})"
+            status_color = "#dc3545"
+            show_download = True
+        elif update_status == "latest":
+            status_text = "Bạn đang dùng bản mới nhất."
+            status_color = "#28a745"
+            show_download = False
+        elif update_status == "error":
+            status_text = "Lỗi kiểm tra cập nhật."
+            status_color = "#dc3545"
+            show_download = False
+        else:
+            status_text = "Đang chờ kiểm tra..."
+            status_color = "#888888"
+            show_download = False
+        
+        self.lbl_update_status = QLabel(status_text)
+        self.lbl_update_status.setStyleSheet(f"color: {status_color};")
         self.lbl_update_status.setWordWrap(True)
         self.lbl_update_status.setMinimumWidth(180)
-        self.btn_check_update = QPushButton("Kiểm tra ngay")
+        self.btn_check_update = QPushButton("Kiểm tra")
         self.btn_check_update.clicked.connect(self._manual_check_update)
         
-        self.btn_download_update = QPushButton("Cập nhật")
+        self.btn_download_update = QPushButton("Cập nhật ngay")
         self.btn_download_update.setStyleSheet("background-color: #28a745; color: white;")
-        self.btn_download_update.setVisible(False)
+        self.btn_download_update.setVisible(show_download)
+        if show_download:
+            self.update_url = cfg.get("update_url", "")
         self.btn_download_update.clicked.connect(self._start_download)
         
         h_upd.addWidget(self.lbl_update_status)
@@ -1986,6 +2022,8 @@ class SettingsDialog(QDialog):
 
     def _on_check_result(self, has_update, version, url, published_at):
         self.btn_check_update.setEnabled(True)
+        # Lưu kết quả vào config
+        main_win = self.parent()
         if has_update:
             msg = f"Có bản cập nhật mới v{version}!"
             if published_at:
@@ -1994,12 +2032,28 @@ class SettingsDialog(QDialog):
             self.lbl_update_status.setStyleSheet("color: #dc3545; font-weight: bold;")
             self.btn_download_update.setVisible(True)
             self.update_url = url
+            if main_win and hasattr(main_win, 'cfg'):
+                main_win.cfg.update({
+                    "update_status": "available",
+                    "update_latest_version": version,
+                    "update_url": url,
+                    "update_published_at": published_at,
+                })
         elif version:
             self.lbl_update_status.setText("Bạn đang dùng bản mới nhất.")
             self.lbl_update_status.setStyleSheet("color: #28a745;")
+            if main_win and hasattr(main_win, 'cfg'):
+                main_win.cfg.update({
+                    "update_status": "latest",
+                    "update_latest_version": version,
+                    "update_url": url,
+                    "update_published_at": published_at,
+                })
         else:
             self.lbl_update_status.setText("Lỗi kiểm tra cập nhật.")
             self.lbl_update_status.setStyleSheet("color: #dc3545;")
+            if main_win and hasattr(main_win, 'cfg'):
+                main_win.cfg.update({"update_status": "error"})
 
     def _start_download(self):
         if not hasattr(self, 'update_url') or not self.update_url.endswith('.exe'):
@@ -2046,9 +2100,7 @@ class SettingsDialog(QDialog):
                     self.btn_download_update.clicked.connect(_open_exe)
                     return
             
-            import subprocess
-            subprocess.Popen([result, "/VERYSILENT", "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS"])
-            QApplication.instance().quit()
+            os.startfile(result)
         else:
             self.btn_download_update.setText("Lỗi tải xuống")
             self.btn_download_update.setEnabled(True)
@@ -2471,10 +2523,11 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(f"{APP_NAME}  v{APP_VERSION}")
         
-        if self.cfg.get("auto_check_update", True):
-            self.update_checker = UpdateCheckerThread()
-            self.update_checker.update_result.connect(self._on_update_result)
-            self.update_checker.start()
+        # Đọc trạng thái cập nhật từ config (do BackgroundService kiểm tra)
+        if self.cfg.get("update_status") == "available" and self.cfg.get("update_latest_version"):
+            self.update_url = self.cfg.get("update_url", "")
+            self.latest_version = self.cfg.get("update_latest_version", "")
+            self.show_update_indicator()
         
         # --- ICON CHO PHẦN MỀM ---
         def resource_path(relative_path):
@@ -2951,12 +3004,6 @@ class MainWindow(QMainWindow):
         if d:
             self.inp_out.setText(d)
             self._save_quick_cfg()
-
-    def _on_update_result(self, has_update, version, url, published_at):
-        if has_update:
-            self.update_url = url
-            self.latest_version = version
-            self.show_update_indicator()
 
     def show_update_indicator(self):
         self.has_update = True
@@ -3890,6 +3937,36 @@ class BackgroundService(QObject):
         self.tray.show()
         
         self.tray.activated.connect(self.on_tray_activated)
+        
+        # --- Kiểm tra cập nhật khi khởi động ---
+        if self.cfg.get("auto_check_update", True):
+            self._bg_update_checker = UpdateCheckerThread()
+            self._bg_update_checker.update_result.connect(self._on_bg_update_result)
+            self._bg_update_checker.start()
+
+    def _on_bg_update_result(self, has_update, version, url, published_at):
+        if has_update:
+            self.cfg.update({
+                "update_status": "available",
+                "update_latest_version": version,
+                "update_url": url,
+                "update_published_at": published_at,
+            })
+            self.tray.showMessage(
+                "PDF to Image - Cập nhật mới",
+                f"Có bản cập nhật mới v{version}!\nMở Cài đặt → Hệ thống để cập nhật.",
+                QSystemTrayIcon.MessageIcon.Information,
+                10000
+            )
+        elif version:
+            self.cfg.update({
+                "update_status": "latest",
+                "update_latest_version": version,
+                "update_url": url,
+                "update_published_at": published_at,
+            })
+        else:
+            self.cfg.update({"update_status": "error"})
 
     def on_tray_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
