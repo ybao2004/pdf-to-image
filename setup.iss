@@ -1,4 +1,4 @@
-﻿#define AppVer "0.0.2"
+#define AppVer "0.0.4"
 
 [Setup]
 AppName=PDF to Image
@@ -78,7 +78,7 @@ procedure KillApp;
 var
   ResultCode: Integer;
 begin
-  Exec('cmd.exe', '/c taskkill /f /im "PDF to Image.exe" /t', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('cmd.exe', '/c taskkill /f /im "PDF to Image.exe"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Sleep(500);
 end;
 
