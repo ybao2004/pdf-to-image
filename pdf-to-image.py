@@ -44,7 +44,7 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate, QStyleOptionViewItem,
     QTabWidget, QDialog, QDialogButtonBox,
     QToolBar, QStatusBar, QToolButton, QSpinBox,
-    QListWidget, QListWidgetItem, QInputDialog, QSplashScreen
+    QListWidget, QListWidgetItem, QInputDialog, QSplashScreen, QRadioButton
 )
 
 import ctypes
@@ -65,6 +65,31 @@ def set_autostart(enable: bool):
         winreg.CloseKey(key)
     except Exception:
         pass
+
+def get_os_full_version() -> str:
+    import platform
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion")
+        product_name = winreg.QueryValueEx(key, "ProductName")[0]
+        # Sửa lỗi Windows 11 hiển thị là Windows 10
+        build_str = platform.version().split('.')[2] if '.' in platform.version() else winreg.QueryValueEx(key, "CurrentBuild")[0]
+        if int(build_str) >= 22000 and "Windows 10" in product_name:
+            product_name = product_name.replace("Windows 10", "Windows 11")
+        try:
+            display_ver = winreg.QueryValueEx(key, "DisplayVersion")[0]
+        except:
+            display_ver = winreg.QueryValueEx(key, "ReleaseId")[0]
+        current_build = winreg.QueryValueEx(key, "CurrentBuild")[0]
+        try:
+            ubr = winreg.QueryValueEx(key, "UBR")[0]
+            build_info = f"{current_build}.{ubr}"
+        except:
+            build_info = current_build
+        winreg.CloseKey(key)
+        return f"{product_name}, {display_ver}, {build_info}"
+    except Exception:
+        return f"{platform.system()} {platform.release()} ({platform.version()})"
 
 def is_autostart_enabled() -> bool:
     try:
@@ -90,6 +115,7 @@ def set_titlebar_theme(hwnd, dark: bool):
 # ======================================================================
 APP_NAME    = "Chuyển đổi PDF sang ảnh"
 APP_VERSION = "0.0.4"
+UPDATE_ANY_DIFFERENT_VERSION = True  # Nếu True, cập nhật nếu phiên bản khác hiện tại; Nếu False, chỉ cập nhật nếu phiên bản lớn hơn.
 APP_AUTHOR  = "@ybao"
 CONFIG_PATH = Path.home() / "pdf_img_config.json"
 
@@ -155,6 +181,7 @@ DEFAULT_CFG = {
     "update_latest_version":"",
     "update_url":           "",
     "update_published_at": "",
+    "update_release_notes":"",
 }
 
 
@@ -375,8 +402,8 @@ QSlider::handle:horizontal {{
 QSlider::handle:horizontal:hover {{ background:{c['accent_h']}; }}
 QSlider::sub-page:horizontal {{ background:{c['accent']}; border-radius:2px; }}
 
-/* ── Checkbox ── */
-QCheckBox {{ spacing:6px; font-size:12px; color:{c['fg2']}; }}
+/* ── Checkbox & RadioButton ── */
+QCheckBox, QRadioButton {{ spacing:6px; font-size:12px; color:{c['fg2']}; }}
 QCheckBox::indicator {{
     width:15px; height:15px; border-radius:3px;
     border:1px solid {c['border2']}; background:{c['input_bg']};
@@ -386,6 +413,16 @@ QCheckBox::indicator:checked {{
     image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='white' d='M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z'/></svg>");
 }}
 QCheckBox::indicator:hover {{ border-color:{c['accent']}; }}
+
+QRadioButton::indicator {{
+    width: 14px; height: 14px; border-radius: 7px;
+    border: 1px solid {c['border2']}; background: {c['input_bg']};
+}}
+QRadioButton::indicator:checked {{
+    background: {c['accent']}; border-color: {c['accent']};
+    image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><circle cx='12' cy='12' r='6' fill='white'/></svg>");
+}}
+QRadioButton::indicator:hover {{ border-color: {c['accent']}; }}
 
 /* ── Progress bar ── */
 QProgressBar {{
@@ -1955,6 +1992,18 @@ class SettingsDialog(QDialog):
         h_upd.addWidget(self.btn_download_update)
         lay_upd.addLayout(h_upd)
         
+        # Vùng hiển thị Release notes
+        self.txt_release_notes = QTextEdit()
+        self.txt_release_notes.setReadOnly(True)
+        self.txt_release_notes.setVisible(show_download)
+        self.txt_release_notes.setMaximumHeight(100)
+        self.txt_release_notes.setStyleSheet("font-size: 11px; color: #888; background: transparent; border: 1px solid #444; border-radius: 4px; padding: 4px;")
+        if show_download:
+            notes = cfg.get("update_release_notes", "")
+            if notes:
+                self.txt_release_notes.setPlainText(notes)
+        lay_upd.addWidget(self.txt_release_notes)
+        
         lay_sys.addWidget(grp_update)
 
         # Thông tin
@@ -1970,6 +2019,60 @@ class SettingsDialog(QDialog):
         has_update = getattr(parent, 'has_update', False)
         sys_name = "Hệ thống 🔴" if has_update else "Hệ thống"
         self.tabs.addTab(tab_sys, sys_name)
+
+        # ── Tab 4: Báo lỗi / Góp ý ──
+        tab_fb = QWidget()
+        lay_fb = QVBoxLayout(tab_fb)
+        
+        grp_fb = QGroupBox("Gửi Góp ý / Báo lỗi")
+        lay_gfb = QVBoxLayout(grp_fb)
+        
+        # Email
+        lay_em = QHBoxLayout()
+        lay_em.addWidget(QLabel("Email của bạn (không bắt buộc):"))
+        self.inp_fb_email = QLineEdit()
+        self.inp_fb_email.setPlaceholderText("Để lại email nếu bạn muốn nhận phản hồi")
+        lay_em.addWidget(self.inp_fb_email)
+        lay_gfb.addLayout(lay_em)
+        
+        # Loại báo cáo
+        lay_type = QHBoxLayout()
+        lay_type.addWidget(QLabel("Loại báo cáo:"))
+        self.rad_fb_gopy = QRadioButton("Góp ý")
+        self.rad_fb_baoloi = QRadioButton("Báo lỗi")
+        self.rad_fb_ca2 = QRadioButton("Cả 2")
+        self.rad_fb_ca2.setChecked(True)
+        lay_type.addWidget(self.rad_fb_gopy)
+        lay_type.addWidget(self.rad_fb_baoloi)
+        lay_type.addWidget(self.rad_fb_ca2)
+        lay_type.addStretch()
+        lay_gfb.addLayout(lay_type)
+        
+        # Nội dung
+        lay_gfb.addWidget(QLabel("Nội dung (Bắt buộc):"))
+        self.txt_fb_content = QTextEdit()
+        self.txt_fb_content.setPlaceholderText("Vui lòng mô tả chi tiết lỗi bạn gặp phải hoặc ý kiến đóng góp của bạn...")
+        lay_gfb.addWidget(self.txt_fb_content)
+        
+        # Thông tin đi kèm
+        import platform
+        os_info_str = get_os_full_version()
+        sys_info = f"Thông tin đính kèm: Tên máy: {platform.node()} | HĐH: {os_info_str}"
+        lbl_sys_info = QLabel(sys_info)
+        lbl_sys_info.setStyleSheet("color: #888; font-size: 11px;")
+        lay_gfb.addWidget(lbl_sys_info)
+        
+        # Nút Gửi
+        self.btn_fb_submit = QPushButton("Gửi báo cáo")
+        self.btn_fb_submit.setStyleSheet("background-color: #007bff; color: white; padding: 5px 15px;")
+        self.btn_fb_submit.clicked.connect(self._submit_feedback)
+        lay_btn_fb = QHBoxLayout()
+        lay_btn_fb.addStretch()
+        lay_btn_fb.addWidget(self.btn_fb_submit)
+        lay_gfb.addLayout(lay_btn_fb)
+        
+        lay_fb.addWidget(grp_fb)
+        self.tabs.addTab(tab_fb, "Báo lỗi / Góp ý")
 
         # Buttons
         btns = QDialogButtonBox(
@@ -2041,12 +2144,13 @@ class SettingsDialog(QDialog):
         self.lbl_update_status.setText("Trạng thái: Đang kiểm tra...")
         self.lbl_update_status.setStyleSheet("color: #007bff;")
         self.btn_download_update.setVisible(False)
+        self.txt_release_notes.setVisible(False)
         
         self.checker = UpdateCheckerThread()
         self.checker.update_result.connect(self._on_check_result)
         self.checker.start()
 
-    def _on_check_result(self, has_update, version, url, published_at):
+    def _on_check_result(self, has_update, version, url, published_at, body):
         self.btn_check_update.setEnabled(True)
         # Lưu kết quả vào config
         main_win = self.parent()
@@ -2058,12 +2162,16 @@ class SettingsDialog(QDialog):
             self.lbl_update_status.setStyleSheet("color: #dc3545; font-weight: bold;")
             self.btn_download_update.setVisible(True)
             self.update_url = url
+            if body:
+                self.txt_release_notes.setPlainText(body)
+                self.txt_release_notes.setVisible(True)
             if main_win and hasattr(main_win, 'cfg'):
                 main_win.cfg.update({
                     "update_status": "available",
                     "update_latest_version": version,
                     "update_url": url,
                     "update_published_at": published_at,
+                    "update_release_notes": body,
                 })
         elif version:
             self.lbl_update_status.setText("Bạn đang dùng bản mới nhất.")
@@ -2074,6 +2182,7 @@ class SettingsDialog(QDialog):
                     "update_latest_version": version,
                     "update_url": url,
                     "update_published_at": published_at,
+                    "update_release_notes": body,
                 })
         else:
             self.lbl_update_status.setText("Lỗi kiểm tra cập nhật.")
@@ -2127,9 +2236,90 @@ class SettingsDialog(QDialog):
                     return
             
             os.startfile(result)
+            
+            # Đóng tất cả các tiến trình PDF to Image.exe hoặc pdf-to-image.py để file cài đặt ghi đè
+            from PyQt6.QtCore import QCoreApplication
+            import psutil
+            import sys
+            import os
+            try:
+                current_pid = os.getpid()
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    try:
+                        if proc.info['pid'] == current_pid: continue
+                        if getattr(sys, 'frozen', False):
+                            if proc.info['name'] == 'PDF to Image.exe': proc.kill()
+                        else:
+                            cmd = proc.info.get('cmdline', [])
+                            if cmd and 'pdf-to-image.py' in ' '.join(cmd): proc.kill()
+                    except:
+                        pass
+            except:
+                pass
+            QCoreApplication.quit()
+            sys.exit(0)
         else:
             self.btn_download_update.setText("Lỗi tải xuống")
             self.btn_download_update.setEnabled(True)
+
+    def _submit_feedback(self):
+        content = self.txt_fb_content.toPlainText().strip()
+        if not content:
+            QMessageBox.warning(self, "Lỗi", "Vui lòng nhập nội dung báo lỗi hoặc góp ý.")
+            return
+            
+        self.btn_fb_submit.setEnabled(False)
+        self.btn_fb_submit.setText("Đang gửi...")
+        
+        email = self.inp_fb_email.text().strip()
+        if self.rad_fb_gopy.isChecked():
+            report_type = "Góp ý"
+        elif self.rad_fb_baoloi.isChecked():
+            report_type = "Báo lỗi"
+        else:
+            report_type = "Cả 2"
+        
+        import platform
+        sys_os = get_os_full_version()
+        sys_node = platform.node()
+        
+        # Thread để gửi ngầm
+        def send_task():
+            import urllib.request
+            import urllib.parse
+            
+            url = "https://docs.google.com/forms/d/e/1FAIpQLSeK1nFpaCWVIXieFrA76oiCEZXySou66UzvcQ2gkx28dWlBWA/formResponse"
+            data = {
+                "entry.694733527": sys_os,
+                "entry.534600766": sys_node,
+                "entry.1814472357": email,
+                "entry.624113546": report_type,
+                "entry.829776351": content
+            }
+            try:
+                encoded_data = urllib.parse.urlencode(data).encode('utf-8')
+                req = urllib.request.Request(url, data=encoded_data, headers={'User-Agent': 'Mozilla/5.0'})
+                urllib.request.urlopen(req, timeout=10)
+                return True
+            except Exception as e:
+                return False
+                
+        self._fb_thread = Thread(target=send_task, daemon=True)
+        
+        def on_done():
+            # Chờ thread xong rồi cập nhật UI
+            self._fb_thread.join(0.1)
+            if not self._fb_thread.is_alive():
+                self.btn_fb_submit.setEnabled(True)
+                self.btn_fb_submit.setText("Gửi báo cáo")
+                self.txt_fb_content.clear()
+                QMessageBox.information(self, "Thành công", "Đã gửi báo cáo thành công. Cảm ơn bạn!")
+                self._fb_timer.stop()
+            
+        self._fb_timer = QTimer()
+        self._fb_timer.timeout.connect(on_done)
+        self._fb_timer.start(500)
+        self._fb_thread.start()
 
     def _on_autostart_toggled(self, checked):
         set_autostart(checked)
@@ -3853,7 +4043,7 @@ class AnimatedSplashScreen(QWidget):
 # BACKGROUND SERVICE & IPC
 # ======================================================================
 class UpdateCheckerThread(QThread):
-    update_result = pyqtSignal(bool, str, str, str)
+    update_result = pyqtSignal(bool, str, str, str, str)
 
     def run(self):
         import urllib.request
@@ -3866,6 +4056,7 @@ class UpdateCheckerThread(QThread):
             with urllib.request.urlopen(req, timeout=5) as response:
                 data = json.loads(response.read().decode('utf-8'))
                 latest_version = data.get("tag_name", "").replace("v", "")
+                body = data.get("body", "")
                 url = data.get("html_url", "https://github.com/ybao2004/pdf-to-image/releases")
                 assets = data.get("assets", [])
                 for asset in assets:
@@ -3881,12 +4072,20 @@ class UpdateCheckerThread(QThread):
                     except:
                         pass
                 
-                if latest_version and latest_version > APP_VERSION:
-                    self.update_result.emit(True, latest_version, url, published_at)
+                if latest_version:
+                    if UPDATE_ANY_DIFFERENT_VERSION:
+                        has_update = (latest_version != APP_VERSION)
+                    else:
+                        has_update = (latest_version > APP_VERSION)
                 else:
-                    self.update_result.emit(False, latest_version, url, published_at)
+                    has_update = False
+                
+                if has_update:
+                    self.update_result.emit(True, latest_version, url, published_at, body)
+                else:
+                    self.update_result.emit(False, latest_version, url, published_at, body)
         except Exception:
-            self.update_result.emit(False, "", "", "")
+            self.update_result.emit(False, "", "", "", "")
 
 class DownloadUpdateThread(QThread):
     progress = pyqtSignal(int)
@@ -3976,13 +4175,14 @@ class BackgroundService(QObject):
             self._bg_update_checker.update_result.connect(self._on_bg_update_result)
             self._bg_update_checker.start()
 
-    def _on_bg_update_result(self, has_update, version, url, published_at):
+    def _on_bg_update_result(self, has_update, version, url, published_at, body):
         if has_update:
             self.cfg.update({
                 "update_status": "available",
                 "update_latest_version": version,
                 "update_url": url,
                 "update_published_at": published_at,
+                "update_release_notes": body,
             })
             self.tray.showMessage(
                 "PDF to Image - Cập nhật mới",
@@ -3996,6 +4196,7 @@ class BackgroundService(QObject):
                 "update_latest_version": version,
                 "update_url": url,
                 "update_published_at": published_at,
+                "update_release_notes": body,
             })
         else:
             self.cfg.update({"update_status": "error"})
