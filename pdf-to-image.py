@@ -114,7 +114,7 @@ def set_titlebar_theme(hwnd, dark: bool):
 # CONSTANTS
 # ======================================================================
 APP_NAME    = "Chuyển đổi PDF sang ảnh"
-APP_VERSION = "0.0.8"
+APP_VERSION = "0.0.9"
 UPDATE_ANY_DIFFERENT_VERSION = True  # Nếu True, cập nhật nếu phiên bản khác hiện tại; Nếu False, chỉ cập nhật nếu phiên bản lớn hơn.
 UPDATE_CHECK_INTERVAL_MINUTES = 60   # Thời gian (phút) giữa mỗi lần kiểm tra ngầm phiên bản mới
 APP_AUTHOR  = "@ybao"
@@ -135,9 +135,9 @@ SIZE_LIMITS = [
     ("500 KB", 500),
     ("1 MB",  1024),
     ("2 MB",  2048),
-    ("3 MB",  2048),
-    ("5 MB",  2048),
-    ("10 MB",  2048),
+    ("3 MB",  3072),
+    ("5 MB",  5120),
+    ("10 MB", 10240),
 ]
 
 # Queue column indices
@@ -2419,24 +2419,52 @@ def save_to_buf(img, buf, pil_fmt: str, quality: int, size_kb: int):
         img.save(buf, pil_fmt, **kw); return
 
     limit = size_kb * 1024
-    lo, hi, best = 10, quality, 10
+
+    # Try saving at original quality first — skip compression if already under limit
+    temp = io.BytesIO()
+    img.save(temp, pil_fmt, **kw)
+    if len(temp.getvalue()) <= limit:
+        buf.write(temp.getvalue()); return
+
+    # Binary search for highest quality that fits under the limit
+    lo, hi, best_q = 10, quality - 1, None
     best_buf = None
     for _ in range(8):
+        if lo > hi:
+            break
         mid = (lo + hi) // 2
         kw["quality"] = mid
         temp = io.BytesIO()
         img.save(temp, pil_fmt, **kw)
         if len(temp.getvalue()) <= limit:
-            best = mid; lo = mid + 1
+            best_q = mid; lo = mid + 1
             best_buf = temp
         else:
             hi = mid - 1
-    
+
     if best_buf:
         buf.write(best_buf.getvalue())
-    else:
+        return
+
+    # Fallback: quality=10 still too large — progressively downscale image
+    for scale in (0.75, 0.5, 0.35, 0.25):
+        new_w = max(1, int(img.width * scale))
+        new_h = max(1, int(img.height * scale))
+        from PIL import Image as _PILImage
+        small = img.resize((new_w, new_h), _PILImage.LANCZOS)
         kw["quality"] = 10
-        img.save(buf, pil_fmt, **kw)
+        temp = io.BytesIO()
+        small.save(temp, pil_fmt, **kw)
+        if len(temp.getvalue()) <= limit:
+            buf.write(temp.getvalue()); return
+
+    # Last resort: save smallest version even if over limit
+    kw["quality"] = 10
+    new_w = max(1, int(img.width * 0.25))
+    new_h = max(1, int(img.height * 0.25))
+    from PIL import Image as _PILImage
+    small = img.resize((new_w, new_h), _PILImage.LANCZOS)
+    small.save(buf, pil_fmt, **kw)
 
 def apply_watermark(img, text: str, gray: bool):
     from PIL import ImageDraw, ImageFont
@@ -3284,7 +3312,7 @@ class MainWindow(QMainWindow):
         self.has_update = True
         if hasattr(self, '_act_settings'):
             self._act_settings.setText("⚙ Cài đặt")
-            self._act_settings.setToolTip("Cài đặt nâng cao (Có bản cập nhật mới!)")
+            self._act_settings.setToolTip("Cài đặt nâng cao")
         if hasattr(self, '_badge_btn'):
             self._badge_btn.setBadgeVisible(True)
 
@@ -4285,6 +4313,7 @@ class BackgroundService(QObject):
         self.tray.show()
         
         self.tray.activated.connect(self.on_tray_activated)
+        self.tray.messageClicked.connect(self.show_main_ui_process)
         
         # --- Kiểm tra cập nhật định kỳ ---
         if self.cfg.get("auto_check_update", True):
