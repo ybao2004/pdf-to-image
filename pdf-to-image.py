@@ -114,7 +114,7 @@ def set_titlebar_theme(hwnd, dark: bool):
 # CONSTANTS
 # ======================================================================
 APP_NAME    = "Chuyển đổi PDF sang ảnh"
-APP_VERSION = "0.0.9"
+APP_VERSION = "0.0.10"
 UPDATE_ANY_DIFFERENT_VERSION = True  # Nếu True, cập nhật nếu phiên bản khác hiện tại; Nếu False, chỉ cập nhật nếu phiên bản lớn hơn.
 UPDATE_CHECK_INTERVAL_MINUTES = 60   # Thời gian (phút) giữa mỗi lần kiểm tra ngầm phiên bản mới
 APP_AUTHOR  = "@ybao"
@@ -3709,19 +3709,7 @@ class AnimatedSplashScreen(QWidget):
         self.setFixedSize(540, 320)
         
         self._time = 0.0
-        self._logs = [
-            "Khởi tạo môi trường ảo hóa...",
-            "Đang tải tài nguyên hệ thống cơ bản...",
-            "Nạp lõi xử lý PyMuPDF (Phân giải PDF)...",
-            "Thiết lập bộ giải mã hình ảnh Pillow...",
-            "Tối ưu hóa bộ nhớ RAM cho tiến trình lớn...",
-            "Khởi tạo giao diện đồ họa PyQt6...",
-            "Kết nối phân luồng đa nhiệm (Multi-threading)...",
-            "Đọc cấu hình người dùng từ bộ nhớ đệm...",
-            "Đồng bộ hóa Theme hệ thống Windows...",
-            "Sẵn sàng!"
-        ]
-        self._current_log = self._logs[0]
+        self._current_log = "Khởi tạo môi trường..."
         
         import time
         self._start_time = time.time()
@@ -3731,6 +3719,7 @@ class AnimatedSplashScreen(QWidget):
         import math
         self._glow_hue = random.randint(0, 359)
         self._is_loading_main = False
+        self._main_ready = False
         self._particles = []
         for _ in range(25):
             self._particles.append({
@@ -3757,6 +3746,10 @@ class AnimatedSplashScreen(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_tick)
         self._timer.start(1000 // 60)
+
+        # Tạo MainWindow bắt đầu ở t≈5s (sau khi animation hoàn tất)
+        # Vừa chạy animation, vừa tạo UI — song song hóa thực sự
+        QTimer.singleShot(5000, self._start_loading_main)
         
     def _on_update_result(self, has_update, version, url, published_at, body):
         self._update_checked = True
@@ -3789,60 +3782,59 @@ class AnimatedSplashScreen(QWidget):
     def showEvent(self, event):
         self._start_time = time.time()
         super().showEvent(event)
+    
+    def _start_loading_main(self):
+        """Tạo MainWindow — chạy ở t≈3s sau khi animation cốt lõi hoàn tất."""
+        if self._is_loading_main:
+            return
+        self._is_loading_main = True
+        self._current_log = "Đang nạp giao diện đồ họa..."
+        self.update()
+        QApplication.processEvents()
+        
+        # Tạo MainWindow (block UI thread ~1-2s)
+        self.main_win_instance = self.main_win_class()
+        
+        self._main_ready = True
+        self._current_log = "Sẵn sàng!"
+        self.update()
         
     def _on_tick(self):
         import time
-        from PyQt6.QtWidgets import QApplication
         
         current_time = time.time()
         self._time = current_time - self._start_time
         
-        # Chờ kiểm tra update
-        if not self._update_checked:
-            self._current_log = "Đang kiểm tra phiên bản mới..."
-            self.update()
-            return
-            
-        # Hiện kết quả update trong 1 giây
-        time_since_checked = current_time - self._update_finished_time
-        if time_since_checked < 1.0 and self._update_finished_time > 0:
-            self._current_log = self._update_result_msg
-            self.update()
-            return
-            
-        # Cập nhật Logs liên tục (thời gian fake còn lại)
-        if self._time < 1.5:
-            self._current_log = "Kết nối phân luồng đa nhiệm (Multi-threading)..."
-        elif self._time < 2.5:
-            self._current_log = "Đọc cấu hình người dùng từ bộ nhớ đệm..."
-        elif self._time < 4.2:
-            self._current_log = "Đồng bộ hóa Theme hệ thống Windows..."
-            
+        MIN_SPLASH_TIME = 5.0
+        
+        # Cập nhật log trạng thái theo tiến trình thực tế
+        if not self._is_loading_main:
+            # Đang chạy animation, chưa bắt đầu tạo MainWindow
+            if self._update_checked and self._update_result_msg:
+                self._current_log = self._update_result_msg
+            elif not self._update_checked:
+                self._current_log = "Đang kiểm tra phiên bản mới..."
+            else:
+                self._current_log = "Đang khởi tạo hệ thống..."
+        elif not self._main_ready:
+            self._current_log = "Đang nạp giao diện đồ họa..."
+        else:
+            # MainWindow đã sẵn sàng — chờ đủ thời gian tối thiểu
+            if self._time < MIN_SPLASH_TIME:
+                # Hiện kết quả update nếu có, trong khi chờ đủ 5s
+                if self._update_checked and self._update_result_msg:
+                    self._current_log = self._update_result_msg
+                else:
+                    self._current_log = "Sẵn sàng!"
+            else:
+                # Đã qua 5s VÀ MainWindow sẵn sàng → đóng splash
+                self._timer.stop()
+                self._current_log = "Sẵn sàng!"
+                self.update()
+                QTimer.singleShot(200, self._finish_splash)
+                return
+        
         self.update()
-        
-        # Ngăn chặn đệ quy: Nếu đã vào vòng lặp nạp giao diện thực tế thì KHÔNG gọi tiếp
-        if self._is_loading_main:
-            return
-        
-        # Ở mốc 4.2s, các hiệu ứng chính (Vòng sóng, Icons) đã hoàn tất hoàn toàn.
-        # Lúc này nạp giao diện (block thread) sẽ không làm gián đoạn một animation rõ rệt nào.
-        if self._time >= 4.2:
-            self._is_loading_main = True
-            self._current_log = "Đang nạp giao diện đồ họa (thực thi)..."
-            self.update()
-            QApplication.processEvents()
-            
-            # --- BLOCKS UI THREAD VÀI GIÂY (Không dùng processEvents để tránh giật hình) ---
-            if self.main_win_instance is None:
-                self.main_win_instance = self.main_win_class()
-            
-            self._current_log = "Sẵn sàng!"
-            self.update()
-            QApplication.processEvents()
-            
-            self._timer.stop()
-            QTimer.singleShot(500, self._finish_splash)
-            return
 
     def _finish_splash(self):
         self.main_win_instance.show()
@@ -4404,7 +4396,7 @@ class BackgroundService(QObject):
             try:
                 task = json.loads(data)
                 if task.get("action") == "show_gui":
-                    self.show_main_ui()
+                    self.show_main_ui_process()
                 else:
                     self.pending_tasks.append(task)
                     self.batch_timer.start(500) # Wait 500ms for more files
