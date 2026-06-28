@@ -114,11 +114,12 @@ def set_titlebar_theme(hwnd, dark: bool):
 # CONSTANTS
 # ======================================================================
 APP_NAME    = "Chuyển đổi PDF sang ảnh"
-APP_VERSION = "0.0.10"
+APP_VERSION = "0.1.0"
 UPDATE_ANY_DIFFERENT_VERSION = True  # Nếu True, cập nhật nếu phiên bản khác hiện tại; Nếu False, chỉ cập nhật nếu phiên bản lớn hơn.
 UPDATE_CHECK_INTERVAL_MINUTES = 60   # Thời gian (phút) giữa mỗi lần kiểm tra ngầm phiên bản mới
 APP_AUTHOR  = "@ybao"
 CONFIG_PATH = Path.home() / "pdf_img_config.json"
+TELEMETRY_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbws9uMybPPq39AeGj14-MQrsc7WPipu-aG_B7VPgrvgioDP0ceYYok9U7avsY7_8fx0Cw/exec"  # URL Google Apps Script — xem google_apps_script_guide.md
 
 FORMATS     = ["PNG", "JPG", "WebP", "TIFF"]
 DPI_OPTIONS = [
@@ -183,8 +184,46 @@ DEFAULT_CFG = {
     "update_url":           "",
     "update_published_at": "",
     "update_release_notes":"",
+    "stats_cm_count":  0,
+    "stats_cm_files":  0,
+    "stats_ui_count":  0,
+    "stats_ui_files":  0,
+    "user_email":      "",
 }
 
+
+def send_telemetry(data: dict):
+    """Gửi dữ liệu telemetry/error tới Google Apps Script (non-blocking)."""
+    if not TELEMETRY_SCRIPT_URL:
+        return
+    def _send():
+        try:
+            import urllib.request
+            payload = json.dumps(data).encode('utf-8')
+            req = urllib.request.Request(
+                TELEMETRY_SCRIPT_URL,
+                data=payload,
+                headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'},
+                method='POST'
+            )
+            urllib.request.urlopen(req, timeout=15)
+        except Exception:
+            pass
+    Thread(target=_send, daemon=True).start()
+
+def _build_telemetry_payload(cfg):
+    """Tạo payload telemetry từ config hiện tại."""
+    return {
+        "type":      "telemetry",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "device":    platform.node(),
+        "os":        get_os_full_version(),
+        "version":   APP_VERSION,
+        "cm_count":  cfg.get("stats_cm_count", 0),
+        "cm_files":  cfg.get("stats_cm_files", 0),
+        "ui_count":  cfg.get("stats_ui_count", 0),
+        "ui_files":  cfg.get("stats_ui_files", 0),
+    }
 
 # ======================================================================
 # QSS
@@ -2323,6 +2362,9 @@ class SettingsDialog(QDialog):
         self.btn_fb_submit.setText("Đang gửi...")
         
         email = self.inp_fb_email.text().strip()
+        if email:
+            Config().set("user_email", email)
+            
         if self.rad_fb_gopy.isChecked():
             report_type = "Góp ý"
         elif self.rad_fb_baoloi.isChecked():
@@ -2335,25 +2377,47 @@ class SettingsDialog(QDialog):
         sys_node = platform.node()
         
         # Thread để gửi ngầm
+        result = [False]
         def send_task():
+            if not TELEMETRY_SCRIPT_URL:
+                return
             import urllib.request
-            import urllib.parse
+            import json
+            from datetime import datetime
             
-            url = "https://docs.google.com/forms/d/e/1FAIpQLSeK1nFpaCWVIXieFrA76oiCEZXySou66UzvcQ2gkx28dWlBWA/formResponse"
             data = {
-                "entry.694733527": sys_os,
-                "entry.534600766": sys_node,
-                "entry.1814472357": email,
-                "entry.624113546": report_type,
-                "entry.829776351": content
+                "type":        "feedback",
+                "timestamp":   datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "device":      sys_node,
+                "os":          sys_os,
+                "version":     APP_VERSION,
+                "email":       email,
+                "report_type": report_type,
+                "content":     content
             }
             try:
-                encoded_data = urllib.parse.urlencode(data).encode('utf-8')
-                req = urllib.request.Request(url, data=encoded_data, headers={'User-Agent': 'Mozilla/5.0'})
-                urllib.request.urlopen(req, timeout=10)
-                return True
+                payload = json.dumps(data).encode('utf-8')
+                req = urllib.request.Request(
+                    TELEMETRY_SCRIPT_URL,
+                    data=payload,
+                    headers={'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0'},
+                    method='POST'
+                )
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    resp_text = response.read().decode('utf-8')
+                    try:
+                        resp_json = json.loads(resp_text)
+                        if resp_json.get("status") == "ok":
+                            result[0] = True
+                            result.append("OK")
+                        else:
+                            result[0] = False
+                            result.append(resp_json.get("message", "Unknown Error from Server"))
+                    except Exception:
+                        result[0] = True # Vẫn coi như thành công nếu nó trả về gì đó lạ lùng không lỗi HTTP
             except Exception as e:
-                return False
+                result[0] = False
+                result.append(str(e))
                 
         self._fb_thread = Thread(target=send_task, daemon=True)
         
@@ -2363,9 +2427,14 @@ class SettingsDialog(QDialog):
             if not self._fb_thread.is_alive():
                 self.btn_fb_submit.setEnabled(True)
                 self.btn_fb_submit.setText("Gửi báo cáo")
-                self.txt_fb_content.clear()
-                QMessageBox.information(self, "Thành công", "Đã gửi báo cáo thành công. Cảm ơn bạn!")
                 self._fb_timer.stop()
+                
+                if result[0]:
+                    self.txt_fb_content.clear()
+                    QMessageBox.information(self, "Thành công", "Đã gửi báo cáo thành công. Cảm ơn bạn!")
+                else:
+                    err_msg = result[1] if len(result) > 1 else "Unknown Error"
+                    QMessageBox.warning(self, "Lỗi", f"Không thể gửi báo cáo.\nChi tiết lỗi: {err_msg}")
             
         self._fb_timer = QTimer()
         self._fb_timer.timeout.connect(on_done)
@@ -3652,6 +3721,13 @@ class MainWindow(QMainWindow):
 
         self._save_state()
 
+        # Telemetry: cập nhật thống kê UI và gửi sau 2 phút
+        if not summary["stopped"] and summary["done"] > 0:
+            self.cfg.d["stats_ui_count"] = self.cfg.get("stats_ui_count", 0) + 1
+            self.cfg.d["stats_ui_files"] = self.cfg.get("stats_ui_files", 0) + summary["done"]
+            self.cfg.save()
+            QTimer.singleShot(120_000, lambda: send_telemetry(_build_telemetry_payload(self.cfg)))
+
     # ── OPEN FOLDER ───────────────────────────────────────────────────
     def _open_folder(self, path: str):
         if not path or not os.path.exists(path):
@@ -4315,6 +4391,9 @@ class BackgroundService(QObject):
             self._update_timer.timeout.connect(self._check_update_now)
             self._update_timer.start(UPDATE_CHECK_INTERVAL_MINUTES * 60 * 1000)
 
+        # --- Gửi telemetry khởi động ---
+        send_telemetry(_build_telemetry_payload(self.cfg))
+
     def _check_update_now(self):
         self._bg_update_checker = UpdateCheckerThread()
         self._bg_update_checker.update_result.connect(self._on_bg_update_result)
@@ -4476,6 +4555,14 @@ class BackgroundService(QObject):
         if self.cfg.get("cm_notify", True):
             self.tray.showMessage("Hoàn thành", "Hoàn thành! Đã tạo xong ảnh.", QSystemTrayIcon.MessageIcon.Information, 3000)
 
+        # Telemetry: cập nhật thống kê Context Menu và gửi sau 2 phút
+        done = stats.get("done", 0) if isinstance(stats, dict) else 0
+        if done > 0:
+            self.cfg.d["stats_cm_count"] = self.cfg.get("stats_cm_count", 0) + 1
+            self.cfg.d["stats_cm_files"] = self.cfg.get("stats_cm_files", 0) + done
+            self.cfg.save()
+            QTimer.singleShot(120_000, lambda: send_telemetry(_build_telemetry_payload(self.cfg)))
+
 
 # ======================================================================
 # MAIN
@@ -4488,6 +4575,29 @@ def resource_path(relative_path):
 
 def main():
     multiprocessing.freeze_support()
+
+    # Auto error reporting — bắt mọi uncaught exception
+    _original_excepthook = sys.excepthook
+    def _telemetry_excepthook(exc_type, exc_value, exc_tb):
+        try:
+            import traceback
+            detail = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            email = Config().get("user_email", "")
+            send_telemetry({
+                "type":       "error",
+                "timestamp":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "device":     platform.node(),
+                "os":         get_os_full_version(),
+                "version":    APP_VERSION,
+                "email":      email,
+                "error_type": f"{exc_type.__name__}: {exc_value}",
+                "detail":     detail[-2000:],  # Giới hạn 2000 ký tự
+            })
+        except Exception:
+            pass
+        _original_excepthook(exc_type, exc_value, exc_tb)
+    sys.excepthook = _telemetry_excepthook
+
     if platform.system() == "Windows":
         try:
             import ctypes
